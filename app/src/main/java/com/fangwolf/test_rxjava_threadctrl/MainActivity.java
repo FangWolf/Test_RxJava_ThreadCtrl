@@ -1,5 +1,6 @@
 package com.fangwolf.test_rxjava_threadctrl;
 
+import android.annotation.SuppressLint;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.util.Log;
@@ -12,9 +13,12 @@ import java.util.concurrent.TimeUnit;
 import io.reactivex.Observable;
 import io.reactivex.ObservableEmitter;
 import io.reactivex.ObservableOnSubscribe;
+import io.reactivex.ObservableSource;
 import io.reactivex.Observer;
 import io.reactivex.android.schedulers.AndroidSchedulers;
 import io.reactivex.disposables.Disposable;
+import io.reactivex.functions.Consumer;
+import io.reactivex.functions.Function;
 import io.reactivex.schedulers.Schedulers;
 import retrofit2.Retrofit;
 import retrofit2.adapter.rxjava2.RxJava2CallAdapterFactory;
@@ -24,83 +28,67 @@ import retrofit2.converter.gson.GsonConverterFactory;
 public class MainActivity extends AppCompatActivity {
     String TAG = "MainActivity";
 
-    TextView textView;
-    Button button;
+    // 定义Observable接口类型的网络请求对象
+    Observable<Translation> observable1;
+    Observable<Translation1> observable2;
 
+    @SuppressLint("CheckResult")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        textView = findViewById(R.id.textView);
-        button = findViewById(R.id.button);
-        button.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                //通过 .subscribeOn 设置 被观察者 在io线程 .observeOn设置 观察者在主线程更新UI
-                Observable.interval(1, TimeUnit.SECONDS).subscribeOn(Schedulers.io()).observeOn(AndroidSchedulers.mainThread()).subscribe(new Observer<Long>() {
-                    @Override
-                    public void onSubscribe(Disposable d) {
 
-                    }
-
-                    @Override
-                    public void onNext(Long aLong) {
-                        //更新UI
-                        textView.setText(" "+aLong);
-
-                    }
-
-                    @Override
-                    public void onError(Throwable e) {
-
-                    }
-
-                    @Override
-                    public void onComplete() {
-
-                    }
-                });
-            }
-        });
-
-        //步骤4：创建Retrofit对象
+        // 步骤1：创建Retrofit对象
         Retrofit retrofit = new Retrofit.Builder()
                 .baseUrl("http://fy.iciba.com/") // 设置 网络请求 Url
                 .addConverterFactory(GsonConverterFactory.create()) //设置使用Gson解析(记得加入依赖)
                 .addCallAdapterFactory(RxJava2CallAdapterFactory.create()) // 支持RxJava
                 .build();
 
-        // 步骤5：创建 网络请求接口 的实例
+        // 步骤2：创建 网络请求接口 的实例
         GetRequest_Interface request = retrofit.create(GetRequest_Interface.class);
 
-        // 步骤6：采用Observable<...>形式 对 网络请求 进行封装
-        Observable<Translation> observable = request.getCall();
+        // 步骤3：采用Observable<...>形式 对 2个网络请求 进行封装
+        observable1 = request.getCall();
+        observable2 = request.getCall_2();
 
-        // 步骤7：发送网络请求
-        observable.subscribeOn(Schedulers.io())               // 在IO线程进行网络请求
-                .observeOn(AndroidSchedulers.mainThread())  // 回到主线程 处理请求结果
-                .subscribe(new Observer<Translation>() {
+
+        observable1.subscribeOn(Schedulers.io())               // （初始被观察者）切换到IO线程进行网络请求1
+                .observeOn(AndroidSchedulers.mainThread())  // （新观察者）切换到主线程 处理网络请求1的结果
+                .doOnNext(new Consumer<Translation>() {
                     @Override
-                    public void onSubscribe(Disposable d) {
-                        Log.d(TAG, "开始采用subscribe连接");
+                    public void accept(Translation result) throws Exception {
+                        Log.d(TAG, "第1次网络请求成功");
+                        result.show();
+                        // 对第1次网络请求返回的结果进行操作 = 显示翻译结果
                     }
+                })
 
+                .observeOn(Schedulers.io())                 // （新被观察者，同时也是新观察者）切换到IO线程去发起登录请求
+                // 特别注意：因为flatMap是对初始被观察者作变换，所以对于旧被观察者，它是新观察者，所以通过observeOn切换线程
+                // 但对于初始观察者，它则是新的被观察者
+                .flatMap(new Function<Translation, ObservableSource<Translation1>>() { // 作变换，即作嵌套网络请求
                     @Override
-                    public void onNext(Translation result) {
-                        // 步骤8：对返回的数据进行处理
-                        result.show() ;
+                    public ObservableSource<Translation1> apply(Translation result) throws Exception {
+                        // 将网络请求1转换成网络请求2，即发送网络请求2
+                        return observable2;
                     }
+                })
 
+                .observeOn(AndroidSchedulers.mainThread())  // （初始观察者）切换到主线程 处理网络请求2的结果
+
+                .subscribe(new Consumer<Translation1>() {
                     @Override
-                    public void onError(Throwable e) {
-                        Log.d(TAG, "请求失败");
+                    public void accept(Translation1 result) throws Exception {
+                        Log.d(TAG, "第2次网络请求成功");
+                        result.show();
+                        // 对第2次网络请求返回的结果进行操作 = 显示翻译结果
                     }
-
+                }, new Consumer<Throwable>() {
                     @Override
-                    public void onComplete() {
-                        Log.d(TAG, "请求成功");
+                    public void accept(Throwable throwable) throws Exception {
+                        System.out.println("登录失败");
                     }
                 });
-
     }
 }
